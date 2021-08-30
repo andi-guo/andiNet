@@ -38,6 +38,7 @@ class MainNet(nn.Module):
         hidden_dim = transformer.d_model
         # instance branch
         self.class_embed = nn.Linear(hidden_dim, num_classes['entity_labels'] + 1)
+        # 转化为分类问题
         self.pos_embed = MLP(hidden_dim, hidden_dim, 2, 3)
         self.query_embed = nn.Embedding(entity_queries, hidden_dim)
         self.criterion = criterion

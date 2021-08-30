@@ -118,7 +118,7 @@ class BaseTrainer(object):
             count += 1
         # save the result
 
-        f1 = classification_report(targets, results, self.label_index, self.label_name, output_dict=True,
+        f1 = classification_report(targets, results,  labels=self.label_index, target_names=self.label_name, output_dict=True,
                                    zero_division=0)
 
         result_path = f'{self.args.OUTPUT_ROOT}/pred.json'
