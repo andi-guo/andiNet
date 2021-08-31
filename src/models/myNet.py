@@ -5,7 +5,6 @@ from data.const import ENTITY_PADDING, RELATION_PADDING, task_ner_labels
 from utils.utils import accuracy
 
 
-
 class MainNet(nn.Module):
     def __init__(self,
                  backbone,
@@ -38,7 +37,7 @@ class MainNet(nn.Module):
         hidden_dim = transformer.d_model
         # instance branch
         self.class_embed = nn.Linear(hidden_dim, num_classes['entity_labels'] + 1)
-        # 转化为分类问题
+        # 转化为拟合问题, 拟合查找到实体的头和尾的位置
         self.pos_embed = MLP(hidden_dim, hidden_dim, 2, 3)
         self.query_embed = nn.Embedding(entity_queries, hidden_dim)
         self.criterion = criterion
@@ -51,7 +50,7 @@ class MainNet(nn.Module):
         last_hidden = self.backbone(input_ids, mask)
 
         # encoder + decoders
-        hs = self.transformer(last_hidden, mask, self.query_embed.weight)
+        hs = self.transformer(src=last_hidden, mask=mask, query_embed=self.query_embed.weight)
 
         # FFN on top of the instance decoder
         outputs_class = self.class_embed(hs)
@@ -88,6 +87,8 @@ class MainNet(nn.Module):
         t_label, o_label = self.criterion.evaluation_with_match(output, data)
 
         return t_label, o_label
+
+
 class MLP(nn.Module):
     """ Very simple multi-layer perceptron (also called FFN)"""
 
@@ -439,7 +440,7 @@ class SetCriterion(nn.Module):
             index1 = indices_dict[i][0].clone().detach().cuda()
             o_pos = outputs['pred_entity']['pred_pos'].index_select(0, index1)[:, i, :]
             o_max, o_indexes = torch.max(outputs['pred_entity']['pred_logits'], dim=2)
-            o_label= o_indexes.index_select(0, index1)[:, i]
+            o_label = o_indexes.index_select(0, index1)[:, i]
             # 对于 target
             index2 = indices_dict[i][1].clone().detach().cuda()
             t = targets['entities'].index_select(1, index2)[i, :, :]
@@ -461,6 +462,3 @@ class SetCriterion(nn.Module):
         # f1 = classification_report(t_labels, o_labels, label_index, label_name)
 
         return t_labels, o_labels
-
-
-

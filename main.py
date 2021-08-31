@@ -121,7 +121,7 @@ if __name__ == '__main__':
         matcher = HungarianMatcher(cost_class=args.COST_CLASS,
                                    cost_pos=args.COST_POS)
         losses = ['labels', 'pos']
-        weight_dict = {'loss_ce': 1, 'loss_pos': 9}
+        weight_dict = {'loss_ce': 1, 'loss_pos': 99}
         criterion = SetCriterion(matcher=matcher, losses=losses, weight_dict=weight_dict, eos_coef=0.1,
                                  num_classes=num_classes)
         model = MainNet(backbone, transformer, num_classes=num_classes)
@@ -196,7 +196,7 @@ if __name__ == '__main__':
         matcher = HungarianMatcher(cost_class=args.COST_CLASS,
                                    cost_pos=args.COST_POS)
         losses = ['labels', 'pos']
-        weight_dict = {'loss_ce': 1, 'loss_pos': 5}
+        weight_dict = {'loss_ce': 1, 'loss_pos': 19}
         criterion = SetCriterion(matcher=matcher, losses=losses, weight_dict=weight_dict, eos_coef=0.1,
                                  num_classes=num_classes)
         model = MainNet(backbone, transformer, criterion, num_classes=num_classes)

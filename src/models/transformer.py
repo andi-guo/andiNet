@@ -3,6 +3,32 @@ import torch.nn.functional as F
 import torch
 from typing import Optional
 import copy
+import numpy as np
+
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_hid, n_position=200):
+        super(PositionalEncoding, self).__init__()
+
+        # Not a parameter
+        self.register_buffer('pos_table', self._get_sinusoid_encoding_table(n_position, d_hid))
+
+    def _get_sinusoid_encoding_table(self, n_position, d_hid):
+        ''' Sinusoid position encoding table '''
+
+        # TODO: make it with torch instead of numpy
+
+        def get_position_angle_vec(position):
+            return [position / np.power(10000, 2 * (hid_j // 2) / d_hid) for hid_j in range(d_hid)]
+
+        sinusoid_table = np.array([get_position_angle_vec(pos_i) for pos_i in range(n_position)])
+        sinusoid_table[:, 0::2] = np.sin(sinusoid_table[:, 0::2])  # dim 2i
+        sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2])  # dim 2i+1
+
+        return torch.FloatTensor(sinusoid_table).unsqueeze(0)
+
+    def forward(self, x):
+        return x + self.pos_table[:, :x.size(1)].clone().detach()
 
 
 class Transformer(nn.Module):
@@ -15,6 +41,7 @@ class Transformer(nn.Module):
         super().__init__()
         self.d_model = d_model
         self.nhead = nhead
+
         # encoder
         encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
                                                 dropout, activation)
@@ -41,7 +68,9 @@ class Transformer(nn.Module):
         bs, l, h = src.shape
         src = src.permute(1, 0, 2)
         # memory shape: (W*H, bs, d_model)
-        memory = self.encoder(src, src_key_padding_mask=mask)
+        # 直接使用bert 不再使用额外的encoder
+        # memory = self.encoder(src, src_key_padding_mask=mask)
+        memory = src
 
         # object query set
         query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
@@ -130,6 +159,9 @@ class TransformerDecoderLayer(nn.Module):
         self.activation = _get_activation_fn(activation)
         self.normalize_before = normalize_before
 
+        # 位置编码
+        self.position_enc = PositionalEncoding(d_model, n_position=512)
+
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
 
@@ -145,7 +177,7 @@ class TransformerDecoderLayer(nn.Module):
         tgt = tgt + self.dropout1(tgt2)
         tgt = self.norm1(tgt)
         tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt, query_pos),
-                                   key=memory,
+                                   key=self.position_enc(memory),
                                    value=memory, attn_mask=memory_mask,
                                    key_padding_mask=memory_key_padding_mask)[0]
         tgt = tgt + self.dropout2(tgt2)
