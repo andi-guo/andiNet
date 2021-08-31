@@ -33,7 +33,7 @@ class PositionalEncoding(nn.Module):
 
 class Transformer(nn.Module):
 
-    def __init__(self, d_model=768, nhead=8, num_encoder_layers=6,
+    def __init__(self, d_model=768, nhead=8, num_encoder_layers=1,
                  num_decoder_layers=6,
                  dim_feedforward=6144,
                  dropout=0.1,
@@ -46,7 +46,7 @@ class Transformer(nn.Module):
         encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
                                                 dropout, activation)
 
-        self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers)
+        self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, d_model)
 
         # instance branch
         decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
@@ -68,9 +68,9 @@ class Transformer(nn.Module):
         bs, l, h = src.shape
         src = src.permute(1, 0, 2)
         # memory shape: (W*H, bs, d_model)
+        memory = self.encoder(src, src_key_padding_mask=mask)
         # 直接使用bert 不再使用额外的encoder
-        # memory = self.encoder(src, src_key_padding_mask=mask)
-        memory = src
+        # memory = src
 
         # object query set
         query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
@@ -85,16 +85,18 @@ class Transformer(nn.Module):
 
 class TransformerEncoder(nn.Module):
 
-    def __init__(self, encoder_layer, num_layers):
+    def __init__(self, encoder_layer, num_layers, d_model, n_position=200):
         super().__init__()
         self.layers = _get_clones(encoder_layer, num_layers)
         self.num_layers = num_layers
+        self.position_enc = PositionalEncoding(d_model, n_position=n_position)
 
     def forward(self, src,
                 mask: Optional[Tensor] = None,
                 src_key_padding_mask: Optional[Tensor] = None,
                 ):
-        output = src
+
+        output = self.position_enc(src)
 
         for layer in self.layers:
             output = layer(output, src_mask=mask,
@@ -126,8 +128,8 @@ class TransformerEncoderLayer(nn.Module):
                 src_mask: Optional[Tensor] = None,
                 src_key_padding_mask: Optional[Tensor] = None,
                 ):
-        q = k = src
-        src2 = self.self_attn(q, k, value=src, attn_mask=src_mask,
+
+        src2 = self.self_attn(src, src, value=src, attn_mask=src_mask,
                               key_padding_mask=src_key_padding_mask)[0]
         src = src + self.dropout1(src2)
         src = self.norm1(src)

@@ -61,7 +61,7 @@ class BaseTrainer(object):
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_norm)
             self.optimizer.step()
             losses_batch.update(losses)
-        logging.info(f'Now: loss is {losses_batch.avg}')
+        logging.info(f'Epoch{self.epoch} : loss is {losses_batch.avg.mean()}')
         # save checkpoint
         if self.rank == 0 and self.epoch >= 0 and self.epoch % self.args.SAVE_INTERVAL == 0:
             # evaluation
@@ -76,7 +76,6 @@ class BaseTrainer(object):
                 logging.info(f'Now: best {self.PI} is {self.best_performance}')
             else:
                 performance = -1
-
             # save checkpoint
             try:
                 state_dict = self.model.module.state_dict()  # remove prefix of multi GPUs

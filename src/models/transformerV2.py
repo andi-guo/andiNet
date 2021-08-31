@@ -100,10 +100,10 @@ class Encoder(nn.Module):
 
         enc_slf_attn_list = []
         # -- Forward
-        enc_output = self.src_word_emb(src_seq)
+
         if self.scale_emb:
             enc_output *= self.d_model ** 0.5
-        enc_output = self.dropout(self.position_enc(enc_output))
+        enc_output = self.dropout(self.position_enc(src_seq))
         enc_output = self.layer_norm(enc_output)
 
         for enc_layer in self.layer_stack:

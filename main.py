@@ -18,7 +18,9 @@ import os
 import numpy as np
 import random
 import torch.distributed as dist
+import warnings
 
+warnings.filterwarnings('ignore')
 os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2'
 
 # Press the green button in the gutter to run the script.
