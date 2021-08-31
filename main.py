@@ -8,6 +8,7 @@ import time
 import torch
 from src.models.myNet import MainNet, SetCriterion
 from src.models.transformer import Transformer
+# from src.models.transformerV2 import Transformer
 from src.models.backbone import Backbone
 from src.data_structure.data_structure import Dataset
 from src.trainer.trainer import BaseTrainer
