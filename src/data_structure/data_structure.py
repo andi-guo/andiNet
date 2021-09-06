@@ -118,11 +118,11 @@ class Dataset:
                 tokens += sub_token
                 end2id.append(len(tokens) - 1)
             tokens.append(self.tokenizer.sep_token)
-            mask = [1]*len(tokens)
+            mask = [0]*len(tokens)
             if len(tokens) < self.args.MAX_LEN:
                 for t in range(self.args.MAX_LEN - len(tokens)):
                     tokens.append(self.tokenizer.pad_token)
-                    mask.append(0)
+                    mask.append(1)
             if len(start2id) < self.args.MAX_LEN:
                 for t in range(self.args.MAX_LEN - len(start2id)):
                     start2id.append(-1)

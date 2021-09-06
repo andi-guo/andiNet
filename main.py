@@ -6,7 +6,8 @@ import argparse
 from utils.utils import setup_logger
 import time
 import torch
-from src.models.myNet import MainNet, SetCriterion
+# from src.models.myNet import MainNet, SetCriterion
+from src.models.myNet_entity_only import MainNet, SetCriterion
 from src.models.transformer import Transformer
 # from src.models.transformerV2 import Transformer
 from src.models.backbone import Backbone
@@ -59,7 +60,7 @@ if __name__ == '__main__':
     parser.add_argument('--SAVE_INTERVAL', type=int, default=10)
     parser.add_argument('--VAL_WHEN_TRAIN', type=bool, default=True)
     parser.add_argument('--SAVE_EVERY_CHECKPOINT', type=bool, default=False)
-    parser.add_argument('--MODEL_NAME', type=str, default='andiNet')
+    parser.add_argument('--MODEL_NAME', type=str, default='andiNet_1')
     parser.add_argument('--OUTPUT_ROOT', type=str, default='output')
     parser.add_argument('--DIST_BACKEND', type=str, default='nccl')
     parser.add_argument(
