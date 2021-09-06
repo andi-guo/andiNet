@@ -5,6 +5,7 @@ from typing import Optional
 import copy
 import numpy as np
 
+
 class PositionalEncoding(nn.Module):
 
     def __init__(self, d_hid, n_position=200):
@@ -31,6 +32,73 @@ class PositionalEncoding(nn.Module):
         return x + self.pos_table[:, :x.size(1)].clone().detach()
 
 
+class InteractionTransformer(nn.Module):
+
+    def __init__(self, d_model=256, nhead=8, num_encoder_layers=1,
+                 num_decoder_layers=6, num_rel_decoder_layers=6,
+                 dim_feedforward=2048, dropout=0.1,
+                 activation="relu", normalize_before=False,
+                 return_intermediate_dec=False):
+        super().__init__()
+        self.d_model = d_model
+        self.nhead = nhead
+        # encoder of the backbone to refine feature sequence
+        encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
+                                                dropout, activation)
+
+        self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, d_model)
+
+        # entity branch
+        decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
+                                                dropout, activation)
+        decoder_norm = nn.LayerNorm(d_model)
+
+        # interaction branch
+        rel_decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
+                                                    dropout, activation)
+        rel_decoder_norm = nn.LayerNorm(d_model)
+
+        # branch aggregation: entity-aware attention
+        interaction_layer = InteractionLayer(d_model, d_model, dropout)
+
+        # finally Decoder for both entity and relation
+        self.decoder = InteractionTransformerDecoder(
+            decoder_layer,
+            rel_decoder_layer,
+            num_decoder_layers,
+            interaction_layer,
+            decoder_norm,
+            rel_decoder_norm,
+            return_intermediate_dec)
+
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, src, mask, query_embed, rel_query_embed):
+        bs, l, h = src.shape
+        # generate feature sequence Batch Size x length x hidden feature dim -> bs, l, h -> l, bs, h
+        src = src.permute(1, 0, 2)
+        # refine the feature sequence using encoder
+        memory = self.encoder(src, src_key_padding_mask=mask)
+        # object query set
+        query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
+        # interaction query set
+        rel_query_embed = rel_query_embed.unsqueeze(1).repeat(1, bs, 1)
+        # initialize the input of entity branch
+        tgt = torch.zeros_like(query_embed)
+        # initialize the input of interaction branch
+        rel_tgt = torch.zeros_like(rel_query_embed)
+        # memory shape: (W*H, bs, d_model)
+        hs, rel_hs = self.decoder(tgt, rel_tgt, memory, memory_key_padding_mask=mask,
+                                  pos=pos_embed, query_pos=query_embed, rel_query_pos=rel_query_embed)
+        # TODO 这里return的形式可能是错的
+        return hs, rel_hs, memory
+
+
 class Transformer(nn.Module):
 
     def __init__(self, d_model=768, nhead=8, num_encoder_layers=1,
@@ -48,7 +116,7 @@ class Transformer(nn.Module):
 
         self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, d_model)
 
-        # instance branch
+        # entity branch
         decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
                                                 dropout, activation)
         decoder_norm = nn.LayerNorm(d_model)
@@ -74,7 +142,7 @@ class Transformer(nn.Module):
 
         # object query set
         query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
-        # initialize the input of instance branch
+        # initialize the input of entity branch
         tgt = torch.zeros_like(query_embed)
         # insatance decoder
         hs = self.decoder(tgt, memory, memory_key_padding_mask=mask, query_pos=query_embed)
@@ -95,7 +163,6 @@ class TransformerEncoder(nn.Module):
                 mask: Optional[Tensor] = None,
                 src_key_padding_mask: Optional[Tensor] = None,
                 ):
-
         output = self.position_enc(src)
 
         for layer in self.layers:
@@ -128,7 +195,6 @@ class TransformerEncoderLayer(nn.Module):
                 src_mask: Optional[Tensor] = None,
                 src_key_padding_mask: Optional[Tensor] = None,
                 ):
-
         src2 = self.self_attn(src, src, value=src, attn_mask=src_mask,
                               key_padding_mask=src_key_padding_mask)[0]
         src = src + self.dropout1(src2)
@@ -228,6 +294,114 @@ class TransformerDecoder(nn.Module):
             return torch.stack(intermediate)
 
         return output
+
+
+class InteractionLayer(nn.Module):
+    def __init__(self, d_model, d_feature, dropout=0.1):
+        super().__init__()
+        self.d_feature = d_feature
+
+        self.det_tfm = nn.Linear(d_model, d_feature)
+        self.rel_tfm = nn.Linear(d_model, d_feature)
+        self.det_value_tfm = nn.Linear(d_model, d_feature)
+
+        self.rel_norm = nn.LayerNorm(d_model)
+
+        if dropout is not None:
+            self.dropout = dropout
+            self.det_dropout = nn.Dropout(dropout)
+            self.rel_add_dropout = nn.Dropout(dropout)
+        else:
+            self.dropout = None
+
+    def forward(self, det_in, rel_in):
+        det_attn_in = self.det_tfm(det_in)
+        rel_attn_in = self.rel_tfm(rel_in)
+        det_value = self.det_value_tfm(det_in)
+        scores = torch.matmul(det_attn_in.transpose(0, 1),
+                              rel_attn_in.permute(1, 2, 0)) / math.sqrt(self.d_feature)
+        det_weight = F.softmax(scores.transpose(1, 2), dim=-1)
+        if self.dropout is not None:
+            det_weight = self.det_dropout(det_weight)
+        rel_add = torch.matmul(det_weight, det_value.transpose(0, 1))
+        rel_out = self.rel_add_dropout(rel_add) + rel_in.transpose(0, 1)
+        rel_out = self.rel_norm(rel_out)
+
+        return det_in, rel_out.transpose(0, 1)
+
+
+class InteractionTransformerDecoder(nn.Module):
+
+    def __init__(self,
+                 decoder_layer,
+                 rel_decoder_layer,
+                 num_layers,
+                 interaction_layer=None,
+                 norm=None,
+                 rel_norm=None,
+                 return_intermediate=False):
+        super().__init__()
+        self.layers = _get_clones(decoder_layer, num_layers)
+        self.rel_layers = _get_clones(rel_decoder_layer, num_layers)
+        self.num_layers = num_layers
+        if interaction_layer is not None:
+            self.rel_interaction_layers = _get_clones(interaction_layer, num_layers)
+        else:
+            self.rel_interaction_layers = None
+        self.norm = norm
+        self.rel_norm = rel_norm
+        self.return_intermediate = return_intermediate
+
+    def forward(self, tgt, rel_tgt, memory,
+                tgt_mask: Optional[Tensor] = None,
+                memory_mask: Optional[Tensor] = None,
+                tgt_key_padding_mask: Optional[Tensor] = None,
+                memory_key_padding_mask: Optional[Tensor] = None,
+                pos: Optional[Tensor] = None,
+                query_pos: Optional[Tensor] = None,
+                rel_query_pos: Optional[Tensor] = None):
+        output = tgt
+        rel_output = rel_tgt
+
+        intermediate = []
+        rel_intermediate = []
+
+        for i in range(self.num_layers):
+            # entity decoder layer
+            output = self.layers[i](output, memory, tgt_mask=tgt_mask,
+                                    memory_mask=memory_mask,
+                                    tgt_key_padding_mask=tgt_key_padding_mask,
+                                    memory_key_padding_mask=memory_key_padding_mask,
+                                    query_pos=query_pos)
+            # interaction decoder layer
+            rel_output = self.rel_layers[i](rel_output, memory, tgt_mask=tgt_mask,
+                                            memory_mask=memory_mask,
+                                            tgt_key_padding_mask=tgt_key_padding_mask,
+                                            memory_key_padding_mask=memory_key_padding_mask,
+                                            query_pos=rel_query_pos)
+            # entity-aware attention module
+            if self.rel_interaction_layers is not None:
+                output, rel_output = self.rel_interaction_layers[i](
+                    output, rel_output
+                )
+            # for aux loss
+            if self.return_intermediate:
+                intermediate.append(self.norm(output))
+                rel_intermediate.append(self.rel_norm(rel_output))
+        # 为了防止self.return_intermediate=False 而  self.norm=None 时没有norm或多norm的bug
+        if self.norm is not None:
+            output = self.norm(output)
+            rel_output = self.rel_norm(rel_output)
+            if self.return_intermediate:
+                intermediate.pop()
+                intermediate.append(output)
+                rel_intermediate.pop()
+                rel_intermediate.append(rel_output)
+
+        if self.return_intermediate:
+            return torch.stack(intermediate), torch.stack(rel_intermediate)
+
+        return output, rel_output
 
 
 def _get_activation_fn(activation):

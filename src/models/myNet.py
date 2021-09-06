@@ -35,11 +35,23 @@ class MainNet(nn.Module):
         self.backbone = backbone
         self.transformer = transformer
         hidden_dim = transformer.d_model
-        # instance branch
+
+        # query embedding
+        self.query_embed = nn.Embedding(entity_queries, hidden_dim)
+        self.rel_query_embed = nn.Embedding(rel_num_queries, hidden_dim)
+
+        # entity branch
         self.class_embed = nn.Linear(hidden_dim, num_classes['entity_labels'] + 1)
         # 转化为拟合问题, 拟合查找到实体的头和尾的位置
+        # ？
         self.pos_embed = MLP(hidden_dim, hidden_dim, 2, 3)
-        self.query_embed = nn.Embedding(entity_queries, hidden_dim)
+
+        self.entity_id_embed = MLP(hidden_dim, hidden_dim, id_emb_dim, 3)
+
+        # relation branch
+        self.rel_class_embed = nn.Linear(hidden_dim, num_classes['rel_labels'])
+        self.rel_src_embed = MLP(hidden_dim, hidden_dim, id_emb_dim, 3)
+        self.rel_dst_embed = MLP(hidden_dim, hidden_dim, id_emb_dim, 3)
         self.criterion = criterion
 
     def forward(self, data):
@@ -52,9 +64,10 @@ class MainNet(nn.Module):
         # encoder + decoders
         hs = self.transformer(src=last_hidden, mask=mask, query_embed=self.query_embed.weight)
 
-        # FFN on top of the instance decoder
+        # FFN on top of the entity decoder
         outputs_class = self.class_embed(hs)
         outputs_pos = self.pos_embed(hs)
+        entity_id_emb = self.entity_id_embed(hs)
 
         out = {'pred_logits': outputs_class, 'pred_pos': outputs_pos}
         output = {
@@ -73,35 +86,31 @@ class MainNet(nn.Module):
         last_hidden = self.backbone(input_ids, mask)
 
         # encoder + decoders
-        hs = self.transformer(last_hidden, mask, self.query_embed.weight)
+        rel_hs, h = self.transformer(last_hidden, mask, self.query_embed.weight)
+        # 因为这里面返回的是Stack 所以需要取最后的一项
+        rel_hs = rel_hs[-1]
+        hs = hs[-1]
 
-        # FFN on top of the instance decoder
+        # FFN on top of the entity decoder
         outputs_class = self.class_embed(hs)
         outputs_pos = self.pos_embed(hs)
 
-        out = {'pred_logits': outputs_class, 'pred_pos': outputs_pos}
+        # FFN on top of the interaction decoder
+        outputs_rel_class = self.rel_class_embed(rel_hs)
+        src_emb = self.rel_src_embed(rel_hs)
+        dst_emb = self.rel_dst_embed(rel_hs)
+
+        out = {'pred_logits': outputs_class, 'pred_pos': outputs_pos, 'id_emb': entity_id_emb}
+        rel_out = {'pred_logits': outputs_rel_class[-1],
+                   'src_emb': src_emb[-1], 'dst_emb': dst_emb[-1]}
         output = {
             'pred_entity': out,
-            'pred_rel': None,
+            'pred_rel': rel_out,
         }
+
         t_label, o_label = self.criterion.evaluation_with_match(output, data)
 
         return t_label, o_label
-
-
-class MLP(nn.Module):
-    """ Very simple multi-layer perceptron (also called FFN)"""
-
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
-        super().__init__()
-        self.num_layers = num_layers
-        h = [hidden_dim] * (num_layers - 1)
-        self.layers = nn.ModuleList(nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim]))
-
-    def forward(self, x):
-        for i, layer in enumerate(self.layers):
-            x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
-        return x
 
 
 class SetCriterion(nn.Module):
@@ -297,6 +306,8 @@ class SetCriterion(nn.Module):
 
     def loss_emb_push(self, outputs_dict, targets, indices_dict, num_boxes_dict, margin=8):
         """id embedding push loss.
+        在关系分类阶段输出的头尾实体的embedding
+        将不同实体的embedding之间的距离拉开
         """
         indices = indices_dict['det']
         idx = self._get_src_permutation_idx(indices)
@@ -384,7 +395,7 @@ class SetCriterion(nn.Module):
             targets[i] = torch.tensor(targets[i][:del_id])
         return targets
 
-    def get_loss(self, loss, outputs_dict, targets, indices_dict, **kwargs):
+    def get_loss(self, loss, outputs_dict, targets, indices_dict, num_dict, **kwargs):
         targets = self._targets_transforme(targets)
         if outputs_dict['pred_rel'] is None:
             loss_map = {
@@ -415,11 +426,24 @@ class SetCriterion(nn.Module):
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
         indices_dict = self.matcher(outputs, targets)
-
+        # Compute the average number of target entity accross all nodes, for normalization purposes
+        num_entity = sum(len(t) for t in targets['entity'])
+        # TODO 弄清楚next(iter(outputs['pred_det'].values()的作用
+        num_entity = torch.as_tensor([num_entity], dtype=torch.float,
+                                     device=next(iter(outputs['pred_det'].values())).device)
+        rel_num = sum(len(t["rel_labels"]) for t in targets)
+        rel_num = torch.as_tensor([rel_num], dtype=torch.float,
+                                  device=next(iter(outputs['pred_rel'].values())).device)
+        num_entity = torch.clamp(num_entity, min=1).item()
+        rel_num = torch.clamp(rel_num, min=1).item()
+        num_dict = {
+            'ent': num_entity,
+            'rel': rel_num
+        }
         losses = {}
         for loss in self.losses:
             losses.update(self.get_loss(loss, outputs, targets,
-                                        indices_dict))
+                                        indices_dict, num_dict))
         # loss_tot = losses['loss_ce'] + losses['loss_pos']
         return losses
 
@@ -462,3 +486,18 @@ class SetCriterion(nn.Module):
         # f1 = classification_report(t_labels, o_labels, label_index, label_name)
 
         return t_labels, o_labels
+
+
+class MLP(nn.Module):
+    """ Very simple multi-layer perceptron (also called FFN)"""
+    # self.pos_embed = MLP(hidden_dim, hidden_dim, 2, 3)
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
+        super().__init__()
+        self.num_layers = num_layers
+        h = [hidden_dim] * (num_layers - 1)
+        self.layers = nn.ModuleList(nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim]))
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
+        return x

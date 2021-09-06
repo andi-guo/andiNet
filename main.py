@@ -45,7 +45,7 @@ if __name__ == '__main__':
     parser.add_argument('--RELATION_NUM', type=int, default=30)
     parser.add_argument('--MAX_LEN', type=int, default=512)
     parser.add_argument('--COST_CLASS', type=int, default=1)
-    parser.add_argument('--COST_POS', type=int, default=5)
+    parser.add_argument('--COST_POS', type=int, default=9)
     parser.add_argument("--negative_label", default="no_relation", type=str)
     parser.add_argument('--task', type=str, default='drug', choices=['drug'])
     parser.add_argument('--SEED', type=int, default=0)
@@ -54,9 +54,9 @@ if __name__ == '__main__':
     parser.add_argument('--bert_learning_rate', type=float, default=1e-5,
                         help="learning rate for the BERT encoder")
     parser.add_argument('--WEIGHT_DECAY', type=float, default=1e-8)
-    parser.add_argument('--LR_DROP', type=int, default=30)
+    parser.add_argument('--LR_DROP', type=int, default=60)
     parser.add_argument('--PRINT_FREQ', type=int, default=5)
-    parser.add_argument('--SAVE_INTERVAL', type=int, default=1)
+    parser.add_argument('--SAVE_INTERVAL', type=int, default=10)
     parser.add_argument('--VAL_WHEN_TRAIN', type=bool, default=True)
     parser.add_argument('--SAVE_EVERY_CHECKPOINT', type=bool, default=False)
     parser.add_argument('--MODEL_NAME', type=str, default='andiNet')
@@ -199,7 +199,7 @@ if __name__ == '__main__':
         matcher = HungarianMatcher(cost_class=args.COST_CLASS,
                                    cost_pos=args.COST_POS)
         losses = ['labels', 'pos']
-        weight_dict = {'loss_ce': 1, 'loss_pos': 19}
+        weight_dict = {'loss_ce': 1, 'loss_pos': 9}
         criterion = SetCriterion(matcher=matcher, losses=losses, weight_dict=weight_dict, eos_coef=0.1,
                                  num_classes=num_classes)
         model = MainNet(backbone, transformer, criterion, num_classes=num_classes)
