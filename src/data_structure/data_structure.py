@@ -5,8 +5,6 @@ import torch
 from data.const import task_rel_labels, task_ner_labels, ENTITY_PADDING, RELATION_PADDING
 
 
-
-
 def _read(json_file):
     # 读取的时候可以一次读取两种文件
     # 仅仅是将json文件转化为list 每个list里面属于字典
@@ -69,7 +67,6 @@ class Dataset:
         self._entity_padding()
         self._relation_padding()
 
-
     def __getitem__(self, ix):
         return self.js[ix]
 
@@ -78,11 +75,17 @@ class Dataset:
 
     def _entity_padding(self):
         for i, sample in enumerate(self.js):
+            entities_temp = []
             for j, entity in enumerate(sample['entities']):
-                self.js[i]['entities'][j][0] = sample['start2id'][entity[0]].numpy().tolist()
-                self.js[i]['entities'][j][1] = sample['end2id'][entity[1]].numpy().tolist()
-                self.js[i]['entities'][j][3] = self.en_label2id[self.js[i]['entities'][j][3]]
-                del self.js[i]['entities'][j][2]
+                # 如果实体位置超过了最大长度，则去掉这个实体
+                if entity[1] < self.args.MAX_LEN - 1 and sample['end2id'][
+                    entity[1]].numpy().tolist() != -1:  # 因为要去掉开头[cls]和结尾[seq]
+                    # 转化为token的位置
+                    sid = sample['start2id'][entity[0]].numpy().tolist()
+                    eid = sample['end2id'][entity[1]].numpy().tolist()
+                    t = self.en_label2id[self.js[i]['entities'][j][3]]
+                    entities_temp.append([sid, eid, t])
+            self.js[i]['entities'] = entities_temp
             if len(self.js[i]['entities']) < self.args.ENTITY_NUM:
                 for t in range(self.args.ENTITY_NUM - len(self.js[i]['entities'])):
                     self.js[i]['entities'].append(ENTITY_PADDING)
@@ -104,7 +107,6 @@ class Dataset:
             relations = self.js[i]['relations']
             self.js[i]['relations'] = torch.tensor(relations, dtype=torch.long).cuda()
 
-
     def _get_input_tensor(self):
         for i, sample in enumerate(self.js):
             # start2id和end2id记录每个word在tokenizer之后的位置
@@ -113,24 +115,39 @@ class Dataset:
             end2id = []
             tokens = [self.tokenizer.cls_token]
             for token in text:
-                start2id.append(len(tokens))
                 sub_token = self.tokenizer.tokenize(token)
+                # 截断过长的文本
+                # TODO 这里逻辑有问题导致后面不得不将长度卡死
+                if len(tokens) + len(sub_token) > self.args.MAX_LEN - 1:
+                    break
                 tokens += sub_token
+                start2id.append(len(tokens))
                 end2id.append(len(tokens) - 1)
             tokens.append(self.tokenizer.sep_token)
-            mask = [0]*len(tokens)
+            mask = [1] * len(tokens)
             if len(tokens) < self.args.MAX_LEN:
                 for t in range(self.args.MAX_LEN - len(tokens)):
                     tokens.append(self.tokenizer.pad_token)
-                    mask.append(1)
+                    mask.append(0)
+            else:
+                tokens = tokens[:self.args.MAX_LEN]
+                mask = mask[:self.args.MAX_LEN]
             if len(start2id) < self.args.MAX_LEN:
                 for t in range(self.args.MAX_LEN - len(start2id)):
                     start2id.append(-1)
+            else:
+                start2id = start2id[:self.args.MAX_LEN]
+
             if len(end2id) < self.args.MAX_LEN:
                 for t in range(self.args.MAX_LEN - len(end2id)):
                     end2id.append(-1)
-            input_ids = self.tokenizer.convert_tokens_to_ids(tokens)
+            else:
+                end2id = end2id[:self.args.MAX_LEN]
 
+            input_ids = self.tokenizer.convert_tokens_to_ids(tokens)
+            assert len(input_ids) == self.args.MAX_LEN
+            assert len(tokens) == self.args.MAX_LEN
+            assert len(mask) == self.args.MAX_LEN
             self.js[i]['input_ids'] = torch.tensor(input_ids, dtype=torch.long).cuda()
             self.js[i]['mask'] = torch.tensor(mask, dtype=torch.bool).cuda()
             self.js[i]['text'] = tokens
@@ -149,10 +166,6 @@ class Dataset:
         en_id2label = {i: label for i, label in enumerate(en_label_list)}
         en_num_labels = len(en_label_list)
         return re_label2id, re_id2label, re_num_labels, en_label2id, en_id2label, en_num_labels
-
-
-
-
 
 # def collate_fn(batch):
 #     #  batch是一个列表，其中是一个一个的元组，每个元组是dataset中_getitem__的结果

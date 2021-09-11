@@ -141,7 +141,8 @@ if __name__ == '__main__':
         count += 1
     # save the result
 
-    f1 = classification_report(targets, results, labels=list(range(len(task_ner_labels['drug']) + 1)), target_names=task_ner_labels['drug'],
+    f1 = classification_report(targets, results, labels=list(range(len(task_ner_labels['drug']) + 1)),
+                               target_names=task_ner_labels['drug'],
                                output_dict=True,
                                zero_division=0)
     print(f1)

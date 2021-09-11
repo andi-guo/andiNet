@@ -22,7 +22,7 @@ import torch.distributed as dist
 import warnings
 
 warnings.filterwarnings('ignore')
-os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2,4'
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
@@ -41,10 +41,10 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=12)
     parser.add_argument('--eval_batch_size', type=int, default=1)
     parser.add_argument('--WORKERS', type=int, default=4)
-    parser.add_argument('--MAX_EPOCH', type=int, default=200)
+    parser.add_argument('--MAX_EPOCH', type=int, default=1000)
     parser.add_argument('--ENTITY_NUM', type=int, default=25)
     parser.add_argument('--RELATION_NUM', type=int, default=30)
-    parser.add_argument('--MAX_LEN', type=int, default=512)
+    parser.add_argument('--MAX_LEN', type=int, default=129)
     parser.add_argument('--COST_CLASS', type=int, default=1)
     parser.add_argument('--COST_POS', type=int, default=9)
     parser.add_argument("--negative_label", default="no_relation", type=str)
@@ -55,7 +55,7 @@ if __name__ == '__main__':
     parser.add_argument('--bert_learning_rate', type=float, default=1e-5,
                         help="learning rate for the BERT encoder")
     parser.add_argument('--WEIGHT_DECAY', type=float, default=1e-8)
-    parser.add_argument('--LR_DROP', type=int, default=60)
+    parser.add_argument('--LR_DROP', type=int, default=200)
     parser.add_argument('--PRINT_FREQ', type=int, default=5)
     parser.add_argument('--SAVE_INTERVAL', type=int, default=10)
     parser.add_argument('--VAL_WHEN_TRAIN', type=bool, default=True)
