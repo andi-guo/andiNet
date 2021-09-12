@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import torch
 from data.const import ENTITY_PADDING, RELATION_PADDING, task_ner_labels
 from utils.utils import accuracy
-
+import matplotlib.pyplot as plt
 
 class MainNet(nn.Module):
     def __init__(self,
@@ -62,7 +62,7 @@ class MainNet(nn.Module):
         last_hidden = self.backbone(input_ids, mask)
 
         # encoder + decoders
-        hs = self.transformer(src=last_hidden, mask=mask, query_embed=self.query_embed.weight)
+        hs, attn_weight = self.transformer(src=last_hidden, mask=mask, query_embed=self.query_embed.weight)
 
         # FFN on top of the entity decoder
         outputs_class = self.class_embed(hs)
@@ -86,10 +86,12 @@ class MainNet(nn.Module):
         last_hidden = self.backbone(input_ids, mask)
 
         # encoder + decoders
-        rel_hs, h = self.transformer(last_hidden, mask, self.query_embed.weight)
+        rel_hs, attn_weight = self.transformer(last_hidden, mask, self.query_embed.weight)
         # 因为这里面返回的是Stack 所以需要取最后的一项
         rel_hs = rel_hs[-1]
-        hs = hs[-1]
+
+        plt.imshow(normed_mask)
+
 
         # FFN on top of the entity decoder
         outputs_class = self.class_embed(hs)
@@ -449,7 +451,7 @@ class SetCriterion(nn.Module):
 
     def evaluation_with_match(self, outputs, targets):
         # 首先通过二分的方法找到preds和targets最佳的对应方式
-        # 对于preds的位置去整，判断位置是否正确，正确的位置将预测的类别加入序列 错误的位置加入一个特殊的类标标记该实体位置不对
+        # 对于preds的位置取整，判断位置是否正确，正确的位置将预测的类别加入序列 错误的位置加入一个特殊的类标标记该实体位置不对
         # 将预测序列使用 classification_report库计算f1
 
         # tuple (row=predict, col=target) 第row个predict 对应第 col个target

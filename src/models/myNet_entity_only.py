@@ -3,7 +3,12 @@ import torch.nn.functional as F
 import torch
 from data.const import ENTITY_PADDING, RELATION_PADDING, task_ner_labels
 from utils.utils import accuracy
+import matplotlib.pyplot as plt
+import numpy as np
+from pylab import mpl
 
+mpl.rcParams['font.sans-serif'] = ['SimHei']  # 指定默认字体
+mpl.rcParams['axes.unicode_minus'] = False  # 解决保存图像是负号'-'显示为方块的问题
 
 
 class MainNet(nn.Module):
@@ -51,7 +56,7 @@ class MainNet(nn.Module):
         last_hidden = self.backbone(input_ids, mask)
 
         # encoder + decoders
-        hs = self.transformer(last_hidden, mask, self.query_embed.weight)
+        hs, attn_weight = self.transformer(last_hidden, mask, self.query_embed.weight)
 
         # FFN on top of the instance decoder
         outputs_class = self.class_embed(hs)
@@ -74,12 +79,23 @@ class MainNet(nn.Module):
         last_hidden = self.backbone(input_ids, mask)
 
         # encoder + decoders
-        hs = self.transformer(last_hidden, mask, self.query_embed.weight)
+        hs, attn_weight = self.transformer(last_hidden, mask, self.query_embed.weight)
 
         # FFN on top of the instance decoder
         outputs_class = self.class_embed(hs)
         outputs_pos = self.pos_embed(hs)
-
+        mask_aux = mask.cpu().detach().numpy()
+        # 根据mask截断内容
+        l = 0
+        for m in np.nditer(mask_aux):
+            if m == False:
+                break
+            l += 1
+        # plt.figure(figsize=(25, l))
+        plt.pcolormesh(attn_weight.squeeze(0).cpu().detach().numpy()[:, :l])
+        sentence = data['text'][:l]
+        plt.xticks(np.arange(l), [s[0] for s in sentence])
+        plt.show()
         out = {'pred_logits': outputs_class, 'pred_pos': outputs_pos}
         output = {
             'pred_entity': out,
@@ -88,6 +104,8 @@ class MainNet(nn.Module):
         t_label, o_label = self.criterion.evaluation_with_match(output, data)
 
         return t_label, o_label
+
+
 class MLP(nn.Module):
     """ Very simple multi-layer perceptron (also called FFN)"""
 
@@ -439,7 +457,7 @@ class SetCriterion(nn.Module):
             index1 = indices_dict[i][0].clone().detach().cuda()
             o_pos = outputs['pred_entity']['pred_pos'].index_select(0, index1)[:, i, :]
             o_max, o_indexes = torch.max(outputs['pred_entity']['pred_logits'], dim=2)
-            o_label= o_indexes.index_select(0, index1)[:, i]
+            o_label = o_indexes.index_select(0, index1)[:, i]
             # 对于 target
             index2 = indices_dict[i][1].clone().detach().cuda()
             t = targets['entities'].index_select(1, index2)[i, :, :]

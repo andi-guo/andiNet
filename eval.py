@@ -22,7 +22,7 @@ import warnings
 from sklearn.metrics import classification_report
 from data.const import task_ner_labels
 from tqdm import tqdm
-
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
 warnings.filterwarnings('ignore')
 os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2'
 

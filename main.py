@@ -23,7 +23,7 @@ import warnings
 
 warnings.filterwarnings('ignore')
 os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2,4'
-
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -38,7 +38,7 @@ if __name__ == '__main__':
     parser.add_argument('--DEVICE', type=str, default='cuda')
     parser.add_argument('--train_data_path', type=str, default='./data/data_mini.json')
     parser.add_argument('--test_data_path', type=str, default='./data/data_mini.json')
-    parser.add_argument('--batch_size', type=int, default=12)
+    parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--eval_batch_size', type=int, default=1)
     parser.add_argument('--WORKERS', type=int, default=4)
     parser.add_argument('--MAX_EPOCH', type=int, default=1000)
