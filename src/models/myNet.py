@@ -4,6 +4,8 @@ import torch
 from data.const import ENTITY_PADDING, RELATION_PADDING, task_ner_labels
 from utils.utils import accuracy
 import matplotlib.pyplot as plt
+import numpy as np
+
 
 class MainNet(nn.Module):
     def __init__(self,
@@ -38,7 +40,7 @@ class MainNet(nn.Module):
 
         # query embedding
         self.query_embed = nn.Embedding(entity_queries, hidden_dim)
-        self.rel_query_embed = nn.Embedding(rel_num_queries, hidden_dim)
+        # self.rel_query_embed = nn.Embedding(rel_num_queries, hidden_dim)
 
         # entity branch
         self.class_embed = nn.Linear(hidden_dim, num_classes['entity_labels'] + 1)
@@ -69,7 +71,7 @@ class MainNet(nn.Module):
         outputs_pos = self.pos_embed(hs)
         entity_id_emb = self.entity_id_embed(hs)
 
-        out = {'pred_logits': outputs_class, 'pred_pos': outputs_pos}
+        out = {'pred_logits': outputs_class, 'pred_pos': outputs_pos, 'id_emb': entity_id_emb}
         output = {
             'pred_entity': out,
             'pred_rel': None,
@@ -81,35 +83,32 @@ class MainNet(nn.Module):
     def evaluate(self, data):
         input_ids = data['input_ids']
         mask = data['mask']
-
         # backbone
         last_hidden = self.backbone(input_ids, mask)
 
         # encoder + decoders
-        rel_hs, attn_weight = self.transformer(last_hidden, mask, self.query_embed.weight)
-        # 因为这里面返回的是Stack 所以需要取最后的一项
-        rel_hs = rel_hs[-1]
+        hs, attn_weight = self.transformer(last_hidden, mask, self.query_embed.weight)
 
-        plt.imshow(normed_mask)
-
-
-        # FFN on top of the entity decoder
+        # FFN on top of the instance decoder
         outputs_class = self.class_embed(hs)
         outputs_pos = self.pos_embed(hs)
-
-        # FFN on top of the interaction decoder
-        outputs_rel_class = self.rel_class_embed(rel_hs)
-        src_emb = self.rel_src_embed(rel_hs)
-        dst_emb = self.rel_dst_embed(rel_hs)
-
-        out = {'pred_logits': outputs_class, 'pred_pos': outputs_pos, 'id_emb': entity_id_emb}
-        rel_out = {'pred_logits': outputs_rel_class[-1],
-                   'src_emb': src_emb[-1], 'dst_emb': dst_emb[-1]}
+        # mask_aux = mask.cpu().detach().numpy()
+        # # 根据mask截断内容
+        # l = 0
+        # for m in np.nditer(mask_aux):
+        #     if m == False:
+        #         break
+        #     l += 1
+        # # plt.figure(figsize=(25, l))
+        # plt.pcolormesh(attn_weight.squeeze(0).cpu().detach().numpy()[:, :l])
+        # sentence = data['text'][:l]
+        # plt.xticks(np.arange(l), [s[0] for s in sentence])
+        # plt.show()
+        out = {'pred_logits': outputs_class, 'pred_pos': outputs_pos}
         output = {
             'pred_entity': out,
-            'pred_rel': rel_out,
+            'pred_rel': None,
         }
-
         t_label, o_label = self.criterion.evaluation_with_match(output, data)
 
         return t_label, o_label
@@ -167,7 +166,7 @@ class SetCriterion(nn.Module):
         idx = self._get_src_permutation_idx(indices)
         tgt_ids = [torch.tensor([span[2].numpy().tolist() for span in v]) for v in targets]
         # 借助 col_inx 找到正确的排列顺序
-        target_classes_o = torch.cat([t[J] for t, (_, J) in zip(tgt_ids, indices)]).cuda()
+        target_classes_o = torch.cat([t[J].long() for t, (_, J) in zip(tgt_ids, indices)]).cuda()
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
                                     dtype=torch.int64, device=src_logits.device).transpose(1, 0)
         target_classes[idx] = target_classes_o
@@ -277,12 +276,11 @@ class SetCriterion(nn.Module):
         tgt_span = [torch.tensor([span[:2].numpy().tolist() for span in v]) for v in targets]
         src_pos = outputs['pred_pos'].transpose(1, 0)[idx]
         # 借助 col_inx 找到正确的排列顺序
-        target_pos = torch.cat([t[i] for t, (_, i) in zip(tgt_span, indices)], dim=0).cuda()
+        target_pos = torch.cat([t[i].long() for t, (_, i) in zip(tgt_span, indices)], dim=0).cuda()
 
         loss_pos = F.l1_loss(src_pos, target_pos, reduction='none')
 
-        losses = {}
-        losses['loss_pos'] = loss_pos.sum() / num_span
+        losses = {'loss_pos': loss_pos.sum() / num_span}
 
         return losses
 
@@ -306,19 +304,25 @@ class SetCriterion(nn.Module):
         losses['rel_loss_bbox'] = loss_bbox.sum() / num_vecs
         return losses
 
-    def loss_emb_push(self, outputs_dict, targets, indices_dict, num_boxes_dict, margin=8):
+    def loss_emb_push(self, outputs_dict, targets, indices_dict, margin=60):
         """id embedding push loss.
-        在关系分类阶段输出的头尾实体的embedding
         将不同实体的embedding之间的距离拉开
+        这里可能会导梯度爆炸
         """
-        indices = indices_dict['det']
+        # indices 表示的是预测和目标的对应关系
+        indices = indices_dict['entity']
+        # idx (对应的bs, 对应的quire_id)
         idx = self._get_src_permutation_idx(indices)
         if len(idx) == 0:
             losses = {'loss_push': torch.Tensor([0.]).mean().to(idx.device)}
             return losses
-        id_emb = outputs_dict['pred_det']['id_emb'][idx]
+        # 得到的25个entity的id_embedding [idx] 找到其中是entity的id_emb
+        id_emb = outputs_dict['pred_entity']['id_emb'][idx]
+        # entity的数量为n
         n = id_emb.shape[0]
+        # 构建两两比较的 meshgrid
         m = [m.reshape(-1) for m in torch.meshgrid(torch.arange(n), torch.arange(n))]
+        # 这里是为了防止重复比较
         mask = torch.where(m[1] < m[0])[0]
         emb_cmp = id_emb[m[0][mask]] - id_emb[m[1][mask]]
         emb_dist = torch.pow(torch.sum(torch.pow(emb_cmp, 2), 1), 0.5)
@@ -403,7 +407,8 @@ class SetCriterion(nn.Module):
             loss_map = {
                 'labels': self.loss_labels,
                 'cardinality': self.loss_cardinality,
-                'pos': self.loss_pos
+                'pos': self.loss_pos,
+                'push': self.loss_emb_push
             }
         else:
             loss_map = {
@@ -429,25 +434,38 @@ class SetCriterion(nn.Module):
         """
         indices_dict = self.matcher(outputs, targets)
         # Compute the average number of target entity accross all nodes, for normalization purposes
-        num_entity = sum(len(t) for t in targets['entity'])
+        num_entity = sum(len(t) for t in targets['entities'])
         # TODO 弄清楚next(iter(outputs['pred_det'].values()的作用
         num_entity = torch.as_tensor([num_entity], dtype=torch.float,
-                                     device=next(iter(outputs['pred_det'].values())).device)
-        rel_num = sum(len(t["rel_labels"]) for t in targets)
+                                     device=next(iter(outputs['pred_entity'].values())).device)
+
+        rel_num = sum(len(t) for t in targets["relations"])
         rel_num = torch.as_tensor([rel_num], dtype=torch.float,
-                                  device=next(iter(outputs['pred_rel'].values())).device)
-        num_entity = torch.clamp(num_entity, min=1).item()
+                                  device=next(iter(outputs['pred_entity'].values())).device)
         rel_num = torch.clamp(rel_num, min=1).item()
+        num_entity = torch.clamp(num_entity, min=1).item()
         num_dict = {
             'ent': num_entity,
             'rel': rel_num
         }
+
         losses = {}
+        # ['labels', 'pos', 'push']
         for loss in self.losses:
             losses.update(self.get_loss(loss, outputs, targets,
                                         indices_dict, num_dict))
         # loss_tot = losses['loss_ce'] + losses['loss_pos']
         return losses
+
+    def getEntity(self, pos, cls, targets):
+        if int(cls) == len(task_ner_labels['drug']):
+            return None
+        sentence = [t[0] for t in targets['text']]
+        # start2id = targets['start2id']
+        # end2id = targets['end2id']
+        entity = sentence[pos[0]:pos[1]]
+        entity_type = task_ner_labels['drug'][cls]
+        return entity, entity_type
 
     def evaluation_with_match(self, outputs, targets):
         # 首先通过二分的方法找到preds和targets最佳的对应方式
@@ -478,6 +496,7 @@ class SetCriterion(nn.Module):
             entity_num, _ = t_pos.size()
             for e in range(entity_num):
                 t_labels.append(t_label[e].cpu().numpy().tolist())
+                self.getEntity(o_pos_round[e, :].cpu().numpy().tolist(), o_label[e].cpu().numpy().tolist(), targets)
                 if torch.equal(o_pos_round[e, :], t_pos[e, :]):
                     o_labels.append(o_label[e].cpu().numpy().tolist())
                     continue
@@ -492,6 +511,7 @@ class SetCriterion(nn.Module):
 
 class MLP(nn.Module):
     """ Very simple multi-layer perceptron (also called FFN)"""
+
     # self.pos_embed = MLP(hidden_dim, hidden_dim, 2, 3)
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
         super().__init__()

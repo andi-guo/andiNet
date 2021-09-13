@@ -58,8 +58,8 @@ class HungarianMatcher(nn.Module):
             targets[i] = torch.tensor(targets[i][:del_id])
 
         # Also concat the target labels and boxes
-        tgt_ids = torch.cat([torch.tensor([span[2].numpy().tolist() for span in v]) for v in targets])
-        tgt_pos = torch.cat([torch.tensor([span[:2].numpy().tolist() for span in v]) for v in targets]).float()
+        tgt_ids = torch.cat([torch.tensor([span[2].numpy().tolist() for span in v], dtype=torch.long) for v in targets])
+        tgt_pos = torch.cat([torch.tensor([span[:2].numpy().tolist() for span in v], dtype=torch.float) for v in targets]).float()
 
         # Compute the classification cost. Contrary to the loss, we don't use the NLL,
         # but approximate it in 1 - proba[target class].
@@ -84,20 +84,20 @@ class HungarianMatcher(nn.Module):
         # list [bs* (row_ind, col_ind)] 每相应的r_ind行选第col_inx列
         indices = [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
 
-        # for rel
-        rel_outputs = outputs_dict['pred_rel']
-        bs, rel_num_queries = rel_outputs["pred_logits"].shape[:2]
-        rel_out_prob = rel_outputs["pred_logits"].flatten(0, 1).sigmoid()  # [batch_size * num_queries, num_classes]
-        rel_out_bbox = rel_outputs["pred_boxes"].flatten(0, 1)  # [batch_size * num_queries, 4]
-        rel_tgt_ids = torch.cat([v["rel_labels"] for v in targets]) # 正确的关系
-        rel_tgt_bbox = torch.cat([v["rel_vecs"] for v in targets])
-
-        # interaction category semantic distance
-        rel_cost_list = []
-        for idx, r_tgt_id in enumerate(rel_tgt_ids):
-            tgt_rel_id = torch.where(r_tgt_id == 1)[0]
-            rel_cost_list.append(-(rel_out_prob[:, tgt_rel_id]).sum(
-                dim=-1) * self.cost_class)
+        # # for rel
+        # rel_outputs = outputs_dict['pred_rel']
+        # bs, rel_num_queries = rel_outputs["pred_logits"].shape[:2]
+        # rel_out_prob = rel_outputs["pred_logits"].flatten(0, 1).sigmoid()  # [batch_size * num_queries, num_classes]
+        # rel_out_bbox = rel_outputs["pred_boxes"].flatten(0, 1)  # [batch_size * num_queries, 4]
+        # rel_tgt_ids = torch.cat([v["rel_labels"] for v in targets]) # 正确的关系
+        # rel_tgt_bbox = torch.cat([v["rel_vecs"] for v in targets])
+        #
+        # # interaction category semantic distance
+        # rel_cost_list = []
+        # for idx, r_tgt_id in enumerate(rel_tgt_ids):
+        #     tgt_rel_id = torch.where(r_tgt_id == 1)[0]
+        #     rel_cost_list.append(-(rel_out_prob[:, tgt_rel_id]).sum(
+        #         dim=-1) * self.cost_class)
 
         indices_dict = {
             'entity': indices

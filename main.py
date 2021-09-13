@@ -7,7 +7,7 @@ from utils.utils import setup_logger
 import time
 import torch
 # from src.models.myNet import MainNet, SetCriterion
-from src.models.myNet_entity_only import MainNet, SetCriterion
+from src.models.myNet import MainNet, SetCriterion
 from src.models.transformer import Transformer
 # from src.models.transformerV2 import Transformer
 from src.models.backbone import Backbone
@@ -36,9 +36,9 @@ if __name__ == '__main__':
     parser.add_argument('--PRETRAINED_MODEL_NAME', type=str, default='hfl/chinese-roberta-wwm-ext')
     parser.add_argument('--final_output_dir', type=str, default='./output')
     parser.add_argument('--DEVICE', type=str, default='cuda')
-    parser.add_argument('--train_data_path', type=str, default='./data/data_mini.json')
-    parser.add_argument('--test_data_path', type=str, default='./data/data_mini.json')
-    parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--train_data_path', type=str, default='./data/train.json')
+    parser.add_argument('--test_data_path', type=str, default='./data/test.json')
+    parser.add_argument('--batch_size', type=int, default=20)
     parser.add_argument('--eval_batch_size', type=int, default=1)
     parser.add_argument('--WORKERS', type=int, default=4)
     parser.add_argument('--MAX_EPOCH', type=int, default=1000)
@@ -63,6 +63,8 @@ if __name__ == '__main__':
     parser.add_argument('--MODEL_NAME', type=str, default='andiNet_1')
     parser.add_argument('--OUTPUT_ROOT', type=str, default='output')
     parser.add_argument('--DIST_BACKEND', type=str, default='nccl')
+    parser.add_argument('--LOOSE', type=list, default=['labels', 'pos'])
+    parser.add_argument('--LOOSE_WEIGHT', type=dict, default={'loss_ce': 1, 'loss_pos': 9, 'loss_push': 1})
     parser.add_argument(
         '--local_rank',
         default=0,
@@ -125,7 +127,7 @@ if __name__ == '__main__':
         matcher = HungarianMatcher(cost_class=args.COST_CLASS,
                                    cost_pos=args.COST_POS)
         losses = ['labels', 'pos']
-        weight_dict = {'loss_ce': 1, 'loss_pos': 99}
+        weight_dict = {'loss_ce': 1, 'loss_pos': 9, 'loss_push': 1}
         criterion = SetCriterion(matcher=matcher, losses=losses, weight_dict=weight_dict, eos_coef=0.1,
                                  num_classes=num_classes)
         model = MainNet(backbone, transformer, num_classes=num_classes)
@@ -199,9 +201,10 @@ if __name__ == '__main__':
 
         matcher = HungarianMatcher(cost_class=args.COST_CLASS,
                                    cost_pos=args.COST_POS)
-        losses = ['labels', 'pos']
-        weight_dict = {'loss_ce': 1, 'loss_pos': 9}
-        criterion = SetCriterion(matcher=matcher, losses=losses, weight_dict=weight_dict, eos_coef=0.1,
+        # get_loss 会遍历losses
+        # losses = ['labels', 'pos', 'push']
+        # weight_dict = {'loss_ce': 1, 'loss_pos': 9, 'loss_push': 1}
+        criterion = SetCriterion(matcher=matcher, losses=args.LOOSE, weight_dict=args.LOOSE_WEIGHT, eos_coef=0.1,
                                  num_classes=num_classes)
         model = MainNet(backbone, transformer, criterion, num_classes=num_classes)
         model = torch.nn.DataParallel(model)

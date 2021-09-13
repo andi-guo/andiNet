@@ -78,12 +78,14 @@ class Dataset:
             entities_temp = []
             for j, entity in enumerate(sample['entities']):
                 # 如果实体位置超过了最大长度，则去掉这个实体
-                if entity[1] < self.args.MAX_LEN - 1 and sample['end2id'][
-                    entity[1]].numpy().tolist() != -1:  # 因为要去掉开头[cls]和结尾[seq]
+                if entity[1] < self.args.MAX_LEN - 1 and sample['end2id'][entity[1]].numpy().tolist() != -1:  # 因为要去掉开头[cls]和结尾[seq]
                     # 转化为token的位置
                     sid = sample['start2id'][entity[0]].numpy().tolist()
                     eid = sample['end2id'][entity[1]].numpy().tolist()
                     t = self.en_label2id[self.js[i]['entities'][j][3]]
+                    assert type(sid) == int
+                    assert type(eid) == int
+                    assert type(t) == int
                     entities_temp.append([sid, eid, t])
             self.js[i]['entities'] = entities_temp
             if len(self.js[i]['entities']) < self.args.ENTITY_NUM:
