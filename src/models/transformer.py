@@ -151,7 +151,7 @@ class Transformer(nn.Module):
         hs, attn_weight = self.decoder(tgt, memory, memory_key_padding_mask=mask, query_pos=query_embed)
         # hs = hs.flatten(start_dim=0, end_dim=1)
 
-        return hs, attn_weight
+        return hs, attn_weight, memory
 
 
 class TransformerEncoder(nn.Module):

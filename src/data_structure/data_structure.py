@@ -122,8 +122,8 @@ class Dataset:
                 # TODO 这里逻辑有问题导致后面不得不将长度卡死
                 if len(tokens) + len(sub_token) > self.args.MAX_LEN - 1:
                     break
-                tokens += sub_token
                 start2id.append(len(tokens))
+                tokens += sub_token
                 end2id.append(len(tokens) - 1)
             tokens.append(self.tokenizer.sep_token)
             mask = [1] * len(tokens)

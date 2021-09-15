@@ -5,6 +5,7 @@ from data.const import ENTITY_PADDING, RELATION_PADDING, task_ner_labels
 from utils.utils import accuracy
 import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
 
 
 class MainNet(nn.Module):
@@ -19,7 +20,8 @@ class MainNet(nn.Module):
                  entity_queries=25,
                  rel_num_queries=30,
                  id_emb_dim=8,
-                 aux_loss=False):
+                 aux_loss=False,
+                 output_attn_figure=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -47,14 +49,17 @@ class MainNet(nn.Module):
         # 转化为拟合问题, 拟合查找到实体的头和尾的位置
         # ？
         self.pos_embed = MLP(hidden_dim, hidden_dim, 2, 3)
-
         self.entity_id_embed = MLP(hidden_dim, hidden_dim, id_emb_dim, 3)
+
+        self.start = nn.Linear(d_model, d_feature)
+        self.end = nn.Linear(d_model, d_feature)
 
         # relation branch
         self.rel_class_embed = nn.Linear(hidden_dim, num_classes['rel_labels'])
         self.rel_src_embed = MLP(hidden_dim, hidden_dim, id_emb_dim, 3)
         self.rel_dst_embed = MLP(hidden_dim, hidden_dim, id_emb_dim, 3)
         self.criterion = criterion
+        self.output_attn_figure = output_attn_figure
 
     def forward(self, data):
         input_ids = data['input_ids']
@@ -64,11 +69,14 @@ class MainNet(nn.Module):
         last_hidden = self.backbone(input_ids, mask)
 
         # encoder + decoders
-        hs, attn_weight = self.transformer(src=last_hidden, mask=mask, query_embed=self.query_embed.weight)
+        hs, attn_weight, memory = self.transformer(src=last_hidden, mask=mask, query_embed=self.query_embed.weight)
 
         # FFN on top of the entity decoder
         outputs_class = self.class_embed(hs)
-        outputs_pos = self.pos_embed(hs)
+        # outputs_pos = self.pos_embed(hs)
+        outputs_start_pos = torch.matmul()
+        outputs_end_pos = torch.matmul()
+
         entity_id_emb = self.entity_id_embed(hs)
 
         out = {'pred_logits': outputs_class, 'pred_pos': outputs_pos, 'id_emb': entity_id_emb}
@@ -92,19 +100,24 @@ class MainNet(nn.Module):
         # FFN on top of the instance decoder
         outputs_class = self.class_embed(hs)
         outputs_pos = self.pos_embed(hs)
-        # mask_aux = mask.cpu().detach().numpy()
-        # # 根据mask截断内容
-        # l = 0
-        # for m in np.nditer(mask_aux):
-        #     if m == False:
-        #         break
-        #     l += 1
-        # # plt.figure(figsize=(25, l))
-        # plt.pcolormesh(attn_weight.squeeze(0).cpu().detach().numpy()[:, :l])
-        # sentence = data['text'][:l]
-        # plt.xticks(np.arange(l), [s[0] for s in sentence])
-        # plt.show()
+        mask_aux = mask.cpu().detach().numpy()
+        if self.output_attn_figure:
+            # 根据mask截断内容
+            l = 0
+            for m in np.nditer(mask_aux):
+                if m == False:
+                    break
+                l += 1
+            # //10 的原因是为了缩放10倍
+            plt.figure(figsize=(l // 2, 12))
+            sns.heatmap(attn_weight.squeeze(0).cpu().detach().numpy()[:, :l],
+                        cmap=sns.color_palette('RdBu', n_colors=128), annot=False)
+            # plt.pcolormesh()
+            sentence = data['text'][:l]
+            plt.xticks([i + 0.5 for i in range(l)], [s[0] for s in sentence])
+            plt.show()
         out = {'pred_logits': outputs_class, 'pred_pos': outputs_pos}
+
         output = {
             'pred_entity': out,
             'pred_rel': None,

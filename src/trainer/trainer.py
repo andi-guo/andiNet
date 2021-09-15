@@ -13,11 +13,12 @@ from data.const import ENTITY_PADDING, RELATION_PADDING, task_ner_labels
 
 
 class BaseTrainer(object):
-    def __init__(self, args, model, criterion, optimizer, lr_scheduler, log_dir='output', rank=0, max_norm=0,
+    def __init__(self, args, model, criterion, optimizer, lr_scheduler, epoch_start=-1, log_dir='output', rank=0,
+                 max_norm=0,
                  performance_indicator='f1'):
         self.model = model
         self.args = args
-        self.epoch = 0
+        self.epoch = epoch_start + 1
         self.max_epoch = args.MAX_EPOCH
         self.criterion = criterion
         self.optimizer = optimizer
@@ -117,7 +118,8 @@ class BaseTrainer(object):
             count += 1
         # save the result
 
-        f1 = classification_report(targets, results,  labels=self.label_index, target_names=self.label_name, output_dict=True,
+        f1 = classification_report(targets, results, labels=self.label_index, target_names=self.label_name,
+                                   output_dict=True,
                                    zero_division=0)
 
         result_path = f'{self.args.OUTPUT_ROOT}/pred.json'

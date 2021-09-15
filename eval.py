@@ -6,7 +6,7 @@ import argparse
 from utils.utils import setup_logger
 import time
 import torch
-from src.models.myNet_entity_only import MainNet, SetCriterion
+from src.models.myNet import MainNet, SetCriterion
 from src.models.transformer import Transformer
 # from src.models.transformerV2 import Transformer
 from src.models.backbone import Backbone
@@ -24,7 +24,7 @@ from data.const import task_ner_labels
 from tqdm import tqdm
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 warnings.filterwarnings('ignore')
-os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2,3'
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
@@ -44,7 +44,7 @@ if __name__ == '__main__':
     parser.add_argument('--WORKERS', type=int, default=4)
     parser.add_argument('--ENTITY_NUM', type=int, default=25)
     parser.add_argument('--RELATION_NUM', type=int, default=30)
-    parser.add_argument('--MAX_LEN', type=int, default=512)
+    parser.add_argument('--MAX_LEN', type=int, default=128)
     parser.add_argument('--COST_CLASS', type=int, default=1)
     parser.add_argument('--COST_POS', type=int, default=9)
     parser.add_argument("--negative_label", default="no_relation", type=str)
@@ -65,7 +65,10 @@ if __name__ == '__main__':
         default=0,
         type=int,
         help='node rank for distributed training, machine level')
-
+    parser.add_argument(
+        '--output_attn_figure',
+        default=True,
+        type=bool)
     args = parser.parse_args()
 
     time_str = time.strftime('%Y-%m-%d-%H-%M')
@@ -119,7 +122,8 @@ if __name__ == '__main__':
     weight_dict = {'loss_ce': 1, 'loss_pos': 9}
     criterion = SetCriterion(matcher=matcher, losses=losses, weight_dict=weight_dict, eos_coef=0.1,
                              num_classes=num_classes)
-    model = MainNet(backbone, transformer, criterion, num_classes=num_classes)
+    model = MainNet(backbone, transformer, criterion, num_classes=num_classes,
+                    output_attn_figure=args.output_attn_figure)
     # 加载模型的参数
     model.load_state_dict(torch.load(args.final_output_dir + '/' + args.CHECK_POINT_NAME))
     model = torch.nn.DataParallel(model)
