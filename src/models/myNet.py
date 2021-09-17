@@ -21,7 +21,8 @@ class MainNet(nn.Module):
                  rel_num_queries=30,
                  id_emb_dim=8,
                  aux_loss=False,
-                 output_attn_figure=False):
+                 output_attn_figure=False,
+                 d_model=768):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -51,8 +52,8 @@ class MainNet(nn.Module):
         self.pos_embed = MLP(hidden_dim, hidden_dim, 2, 3)
         self.entity_id_embed = MLP(hidden_dim, hidden_dim, id_emb_dim, 3)
 
-        self.start = nn.Linear(d_model, d_feature)
-        self.end = nn.Linear(d_model, d_feature)
+        self.pos_start = nn.Linear(d_model, d_model)
+        self.pos_end = nn.Linear(d_model, d_model)
 
         # relation branch
         self.rel_class_embed = nn.Linear(hidden_dim, num_classes['rel_labels'])
@@ -74,11 +75,16 @@ class MainNet(nn.Module):
         # FFN on top of the entity decoder
         outputs_class = self.class_embed(hs)
         # outputs_pos = self.pos_embed(hs)
-        outputs_start_pos = torch.matmul()
-        outputs_end_pos = torch.matmul()
-
-        entity_id_emb = self.entity_id_embed(hs)
-
+        # hs = [l, bs, h]
+        hs_start = self.pos_start(hs)
+        hs_end = self.pos_end(hs)
+        outputs_start_pos = torch.matmul(hs_start.transpose(1, 0), memory.permute(1, 2, 0))
+        outputs_end_pos = torch.matmul(hs_end.transpose(1, 0), memory.permute(1, 2, 0))
+        outputs_start_pos = torch.sigmoid(outputs_start_pos)
+        outputs_end_pos = torch.sigmoid(outputs_end_pos)
+        outputs_pos = (outputs_start_pos, outputs_end_pos)
+        # entity_id_emb = self.entity_id_embed(hs)
+        entity_id_emb = None
         out = {'pred_logits': outputs_class, 'pred_pos': outputs_pos, 'id_emb': entity_id_emb}
         output = {
             'pred_entity': out,
@@ -95,11 +101,17 @@ class MainNet(nn.Module):
         last_hidden = self.backbone(input_ids, mask)
 
         # encoder + decoders
-        hs, attn_weight = self.transformer(last_hidden, mask, self.query_embed.weight)
-
-        # FFN on top of the instance decoder
+        hs, attn_weight, memory = self.transformer(last_hidden, mask, self.query_embed.weight)
+        # FFN on top of the entity decoder
         outputs_class = self.class_embed(hs)
-        outputs_pos = self.pos_embed(hs)
+        # FFN on top of the instance decoder
+        hs_start = self.pos_start(hs)
+        hs_end = self.pos_end(hs)
+        outputs_start_pos = torch.matmul(hs_start.transpose(1, 0), memory.permute(1, 2, 0))
+        outputs_end_pos = torch.matmul(hs_end.transpose(1, 0), memory.permute(1, 2, 0))
+        outputs_start_pos = torch.sigmoid(outputs_start_pos)
+        outputs_end_pos = torch.sigmoid(outputs_end_pos)
+        outputs_pos = (outputs_start_pos, outputs_end_pos)
         mask_aux = mask.cpu().detach().numpy()
         if self.output_attn_figure:
             # 根据mask截断内容
@@ -180,6 +192,7 @@ class SetCriterion(nn.Module):
         tgt_ids = [torch.tensor([span[2].numpy().tolist() for span in v]) for v in targets]
         # 借助 col_inx 找到正确的排列顺序
         target_classes_o = torch.cat([t[J].long() for t, (_, J) in zip(tgt_ids, indices)]).cuda()
+        # 补全全部的25个query
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
                                     dtype=torch.int64, device=src_logits.device).transpose(1, 0)
         target_classes[idx] = target_classes_o
@@ -292,6 +305,41 @@ class SetCriterion(nn.Module):
         target_pos = torch.cat([t[i].long() for t, (_, i) in zip(tgt_span, indices)], dim=0).cuda()
 
         loss_pos = F.l1_loss(src_pos, target_pos, reduction='none')
+
+        losses = {'loss_pos': loss_pos.sum() / num_span}
+
+        return losses
+
+    def loss_pos_with_s_e(self, outputs_dict, targets, indices_dict):
+        """Compute the losses related to the bounding pos, the L1 regression loss and the GIoU loss
+           targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
+           The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
+        """
+        assert 'pred_entity' in outputs_dict
+        outputs = outputs_dict['pred_entity']
+        assert 'pred_pos' in outputs
+        src_pos_start = outputs['pred_pos'][0]
+        src_pos_end = outputs['pred_pos'][1]
+
+        indices = indices_dict['entity']
+        num_span = torch.as_tensor([len(v) for v in targets]).sum()
+        idx = self._get_src_permutation_idx(indices)
+        tgt_span_s = [torch.tensor([span[0].numpy().tolist() for span in v]) for v in targets]
+        tgt_span_e = [torch.tensor([span[1].numpy().tolist() for span in v]) for v in targets]
+        # 借助 col_inx 找到正确的排列顺序
+        target_pos_start = torch.cat([t[i].long() for t, (_, i) in zip(tgt_span_s, indices)], dim=0).cuda()
+        target_pos_end = torch.cat([t[i].long() for t, (_, i) in zip(tgt_span_e, indices)], dim=0).cuda()
+        # 补全全部的25个query
+        target_start = torch.full(src_pos_start.shape[:2], -1,
+                                  dtype=torch.int64, device=src_pos_start.device)
+        target_end = torch.full(src_pos_start.shape[:2], -1,
+                                dtype=torch.int64, device=src_pos_start.device)
+        target_start[idx] = target_pos_start
+        target_end[idx] = target_pos_end
+
+        loss_pos_start = F.cross_entropy(src_pos_start.permute(0, 2, 1), target_start, ignore_index=-1)
+        loss_pos_end = F.cross_entropy(src_pos_end.permute(0, 2, 1), target_end, ignore_index=-1)
+        loss_pos = loss_pos_start + loss_pos_end
 
         losses = {'loss_pos': loss_pos.sum() / num_span}
 
@@ -420,7 +468,7 @@ class SetCriterion(nn.Module):
             loss_map = {
                 'labels': self.loss_labels,
                 'cardinality': self.loss_cardinality,
-                'pos': self.loss_pos,
+                'pos': self.loss_pos_with_s_e,
                 'push': self.loss_emb_push
             }
         else:
@@ -476,7 +524,7 @@ class SetCriterion(nn.Module):
         sentence = [t[0] for t in targets['text']]
         # start2id = targets['start2id']
         # end2id = targets['end2id']
-        entity = sentence[pos[0]:pos[1]]
+        entity = sentence[pos[0].cpu().numpy().tolist():pos[1].cpu().numpy().tolist()]
         entity_type = task_ner_labels['drug'][cls]
         return entity, entity_type
 
@@ -485,32 +533,49 @@ class SetCriterion(nn.Module):
         # 对于preds的位置取整，判断位置是否正确，正确的位置将预测的类别加入序列 错误的位置加入一个特殊的类标标记该实体位置不对
         # 将预测序列使用 classification_report库计算f1
 
-        # tuple (row=predict, col=target) 第row个predict 对应第 col个target
+        # batch_size, tuple (row=predict, col=target) 第row个predict 对应第 col个target
         indices_dict = self.matcher(outputs, targets)['entity']
         # 根据indices选择位置
-        query_entity, bs, _ = outputs['pred_entity']['pred_pos'].size()
+        # query_entity, bs, _ = outputs['pred_entity']['pred_pos'][0].size()
+        bs, query_entity, _ = outputs['pred_entity']['pred_pos'][0].size()
         o_labels = []
         t_labels = []
         for i in range(bs):
             # [0] 表示取row
             # 对于predict
             index1 = indices_dict[i][0].clone().detach().cuda()
-            o_pos = outputs['pred_entity']['pred_pos'].index_select(0, index1)[:, i, :]
+            # o_pos = outputs['pred_entity']['pred_pos'].index_select(0, index1)[:, i, :]
+            # outputs['pred_entity']['pred_pos'][0] -> bs, l, softmax
+            o_start_max, o_start_indexes = torch.max(outputs['pred_entity']['pred_pos'][0], dim=2)
+            o_end_max, o_end_indexes = torch.max(outputs['pred_entity']['pred_pos'][1], dim=2)
+            o_pos_start = o_start_indexes.index_select(1, index1)[i, :]
+            o_pos_end = o_end_indexes.index_select(1, index1)[i, :]
+            # o_pos -> for ist bs,[bs=1, num_entity]
+            o_pos = []
+
+            # o_pos_start.shape[0] == num_entity
+            for j in range(o_pos_start.shape[0]):
+                o_pos.append([o_pos_start[j], o_pos_end[j]])
+
+            # outputs['pred_entity']['pred_logits'] -> l, bs, softmax
             o_max, o_indexes = torch.max(outputs['pred_entity']['pred_logits'], dim=2)
             o_label = o_indexes.index_select(0, index1)[:, i]
+
             # 对于 target
             index2 = indices_dict[i][1].clone().detach().cuda()
             t = targets['entities'].index_select(1, index2)[i, :, :]
+            # t_pos -> num_entity, 2
             t_pos = t[:, :2]
             t_label = t[:, 2]
             # 最后需要生成label序列
             # 1. 将o_pos 取整数 2.只有位置正确才会将预测的label放上去
-            o_pos_round = o_pos.round().long()
+
             entity_num, _ = t_pos.size()
             for e in range(entity_num):
                 t_labels.append(t_label[e].cpu().numpy().tolist())
-                self.getEntity(o_pos_round[e, :].cpu().numpy().tolist(), o_label[e].cpu().numpy().tolist(), targets)
-                if torch.equal(o_pos_round[e, :], t_pos[e, :]):
+                self.getEntity(o_pos[e], o_label[e].cpu().numpy().tolist(), targets)
+                if o_pos[e][0].cpu().numpy().tolist() == t_pos[e, :].cpu().numpy().tolist()[0]\
+                        and o_pos[e][1].cpu().numpy().tolist() == t_pos[e, :].cpu().numpy().tolist()[1]:
                     o_labels.append(o_label[e].cpu().numpy().tolist())
                     continue
                 else:

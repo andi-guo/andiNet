@@ -26,7 +26,7 @@ class HungarianMatcher(nn.Module):
         assert cost_class != 0 or cost_bbox != 0 or cost_giou != 0, "all costs cant be 0"
 
     @torch.no_grad()
-    def forward(self, outputs_dict, targets):
+    def forward(self, outputs_dict, targets, pos_type='separate'):
         """ Performs the matching
 
         Returns:
@@ -35,16 +35,17 @@ class HungarianMatcher(nn.Module):
                 - index_j is the indices of the corresponding selected targets (in order)
             For each batch element, it holds:
                 len(index_i) = len(index_j) = min(num_queries, num_target_boxes)
+            C的意义为 b的q选对第i个答案（i in num_entity in all batch）类别和位置的概率
         """
+
+        # output_pos [bs, q, l]
+        # output_cla [q, bs, class]
         outputs = outputs_dict['pred_entity']
         num_queries, bs = outputs["pred_logits"].shape[:2]
 
-        # We flatten to compute the cost matrices in a batch
-        out_prob = outputs["pred_logits"].flatten(0, 1).softmax(-1)  # [batch_size * num_queries, num_classes]
-        out_pos = outputs["pred_pos"].flatten(0, 1)  # [batch_size * num_queries, 2]
-
         # Also concat the target labels and boxes
-        # targets = num_queries , bs, 3 [0:start 1:end 2:label]
+        # targets ->[num_queries , bs, 3] [0:start 1:end 2:label]
+        # targets -> [bs, num_entity, span=3]
         targets = targets['entities']
         # 这里不得不将所有的数据都移动到cpu中进行操作
         targets = targets.cpu().numpy().tolist()
@@ -57,29 +58,49 @@ class HungarianMatcher(nn.Module):
                     break
             targets[i] = torch.tensor(targets[i][:del_id])
 
-        # Also concat the target labels and boxes
+        # 拼接类别的目标 [b1,...bn]`
         tgt_ids = torch.cat([torch.tensor([span[2].numpy().tolist() for span in v], dtype=torch.long) for v in targets])
-        tgt_pos = torch.cat([torch.tensor([span[:2].numpy().tolist() for span in v], dtype=torch.float) for v in targets]).float()
 
+        # We flatten to compute the cost matrices in a batch
+        # [num_queries, batch_size, num_classes]
+        out_prob = outputs["pred_logits"].transpose(1, 0).flatten(0, 1).softmax(
+            -1)  # [num_queries_b1 b2 b3 ...b, num_classes]
         # Compute the classification cost. Contrary to the loss, we don't use the NLL,
         # but approximate it in 1 - proba[target class].
         # The 1 is a constant that doesn't change the matching, it can be ommitted.
+        # cost_class = [num_query*batch_size=175, nums_entity_in_all batch] -> 这里有选择和复制两个功能
         cost_class = -out_prob[:, tgt_ids]
 
-        # Compute the L1 cost between boxes
-        cost_pos = torch.cdist(out_pos.cpu(), tgt_pos, p=1)
+        if pos_type == 'separate':
+            out_pos_start = outputs["pred_pos"][0].flatten(0, 1)  # [batch_size_num_queried_1, n2 ... n25, num_classes]
+            out_pos_end = outputs["pred_pos"][1].flatten(0, 1)  # [batch_size * num_queries, num_classes]
+            tgt_pos_start = torch.cat(
+                [torch.tensor([span[1].numpy().tolist() for span in v], dtype=torch.long) for v in targets]).long()
+            tgt_pos_end = torch.cat(
+                [torch.tensor([span[2].numpy().tolist() for span in v], dtype=torch.long) for v in targets]).long()
+            cost_pos = -out_pos_start[:, tgt_pos_start] - out_pos_end[:, tgt_pos_end]
+        else:
+            # We flatten to compute the cost matrices in a batch
+            out_pos = outputs["pred_pos"].flatten(0, 1)  # [batch_size * num_queries, 2]
+            # Compute the L1 cost between boxes
+            tgt_pos = torch.cat(
+                [torch.tensor([span[:2].numpy().tolist() for span in v], dtype=torch.float) for v in targets]).float()
+            cost_pos = torch.cdist(out_pos.cpu(), tgt_pos, p=1)
 
         # Final cost matrix
         C = self.cost_pos * cost_pos.cuda() + self.cost_class * cost_class
         # C = bs, num_queries, sum(target_entity) for all bs
         C = C.view(bs, num_queries, -1).cpu()
-        # 为什么target并没有被分
-        sizes = [len(v) for v in targets]
+
         # C.split(sizes, -1) = tuple:4  (bs, num_queries, target_entity)
         # c[i]: per_sentence, num_queries, target_entity
         # row_ind, col_ind = linear_sum_assignment(cost)
         # col_ind表示每一行应该如何选 这里也就是 如何选target_entity
+        # 这里利用size把不属于这个batch的内容给去掉
+        # 为什么target并没有被分
+        sizes = [len(v) for v in targets]
         C = C.split(sizes, -1)
+        # 这里再把不同batch的单独摘出来
         indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C)]
         # list [bs* (row_ind, col_ind)] 每相应的r_ind行选第col_inx列
         indices = [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
